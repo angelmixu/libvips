@@ -80,7 +80,7 @@ void VImage::refblock::debug_print()
 		printf( " (im->filename = \"%s\")", im->filename );
 	printf( "\n" );
 	printf( "  close_on_delete = %d\n", close_on_delete );
-	printf( "  nrefs (refs to us) = %d\n", nrefs );
+	printf( "  nrefs (refs to us) = %d\n", nrefs.load() );
 	printf( "  orefs (refs we make) = refblocks " );
 	for( i = orefs.begin(); i != orefs.end(); ++i )
 		printf( "%p ", *i );

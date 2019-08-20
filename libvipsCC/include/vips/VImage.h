@@ -44,6 +44,7 @@
 # include <list>
 # include <complex>
 # include <vector>
+# include <atomic>
 #endif /*!SWIG*/
 
 /* Wrap pointers to these, but we don't want to import all the old C API. Just 
@@ -92,7 +93,7 @@ public:
 	VIPS_CC_API struct refblock {
 		_VipsImage *im;			// IMAGE pointer
 		int close_on_delete;		// Set if we must im_close()
-		int nrefs;			// Number of refs to us
+		std::atomic_int nrefs;			// Number of refs to us
 		std::list<refblock*> orefs;	// Refs im makes 
 
 		// Construct/destruct
