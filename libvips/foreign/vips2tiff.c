@@ -720,8 +720,8 @@ wtiff_write_header( Wtiff *wtiff, Layer *layer )
 			for (i = 0; i < alpha_bands; i++)
 			{
 				vips_snprintf(ink_tag, 128, VIPS_META_INK_TYPE, colour_bands + i);
-				if (vips_image_get_int(wtiff->im, ink_tag, &ink_type) == 0
-										&& ink_type == VIPS_INK_TRANSPARENCY)
+				if (vips_image_get_int(wtiff->ready, ink_tag, &ink_type) == 0
+							&& ink_type == VIPS_INK_TRANSPARENCY)
 					v[i] = EXTRASAMPLE_UNASSALPHA;
 				else
 					v[i] = EXTRASAMPLE_UNSPECIFIED;

@@ -151,7 +151,7 @@ typedef struct _VipsSource {
 	 * buffer, from mmaping the file, from reading the pipe into memory), 
 	 * a pointer to the start.
 	 */
-	const void *data;
+	const VipsPel *data;
 
 	/* For is_pipe sources, save data read during header phase here. If 
 	 * we rewind and try again, serve data from this until it runs out.
@@ -214,7 +214,7 @@ VipsSource *vips_source_new_from_options( const char *options );
 void vips_source_minimise( VipsSource *source );
 int vips_source_unminimise( VipsSource *source );
 int vips_source_decode( VipsSource *source );
-gint64 vips_source_read( VipsSource *source, void *data, size_t length );
+gint64 vips_source_read( VipsSource *source, VipsPel *data, size_t length );
 gboolean vips_source_is_mappable( VipsSource *source );
 const void *vips_source_map( VipsSource *source, size_t *length );
 VipsBlob *vips_source_map_blob( VipsSource *source );

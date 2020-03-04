@@ -51,12 +51,14 @@
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif /*HAVE_UNISTD_H*/
+#ifdef HAVE_IO_H
+#include <io.h>
+#endif /*HAVE_IO_H*/
 #include <string.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
 
 #include <vips/vips.h>
 #include <vips/internal.h>
@@ -624,7 +626,7 @@ vips_source_decode( VipsSource *source )
  * Returns: the number of bytes read, 0 on end of file, -1 on error.
  */
 gint64
-vips_source_read( VipsSource *source, void *buffer, size_t length )
+vips_source_read( VipsSource *source, VipsPel *buffer, size_t length )
 {
 	VipsSourceClass *class = VIPS_SOURCE_GET_CLASS( source );
 

@@ -45,12 +45,14 @@
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif /*HAVE_UNISTD_H*/
+#ifdef HAVE_IO_H
+#include <io.h>
+#endif /*HAVE_IO_H*/
 #include <string.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
 
 #include <vips/vips.h>
 #include <vips/internal.h>
@@ -293,7 +295,7 @@ vips_target_new_to_memory( void )
 
 static int
 vips_target_write_unbuffered( VipsTarget *target, 
-	const void *data, size_t length )
+	const VipsPel *data, size_t length )
 {
 	VipsTargetClass *class = VIPS_TARGET_GET_CLASS( target );
 
