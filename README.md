@@ -167,9 +167,9 @@ Build with the GCC auto-vectorizer and diagnostics (or just -O3):
 # Dependencies 
 
 libvips has to have `glib2.0-dev` and `libexpat1-dev`. Other dependencies
-are optional, see below.
+are optional.
 
-# Optional dependencies
+## Optional dependencies
 
 If suitable versions are found, libvips will add support for the following
 libraries automatically. See `./configure --help` for a set of flags to
@@ -300,9 +300,25 @@ files: Aperio, Hamamatsu, Leica, MIRAX, Sakura, Trestle, and Ventana.
 
 If available, libvips can load and save HEIC images. 
 
-# Disclaimer
+# Contributors
 
-No guarantees of performance accompany this software, nor is any
-responsibility assumed on the part of the authors. Please read the licence
-agreement.
+### Code Contributors
 
+This project exists thanks to all the people who contribute. 
+
+<a href="https://github.com/libvips/libvips/graphs/contributors"><img src="https://opencollective.com/libvips/contributors.svg?width=890&button=false" /></a>
+
+### Organizations
+
+Support this project with your organization. Your logo will show up here with a link to your website. 
+
+<a href="https://opencollective.com/libvips/organization/0/website"><img src="https://opencollective.com/libvips/organization/0/avatar.svg"></a>
+<a href="https://opencollective.com/libvips/organization/1/website"><img src="https://opencollective.com/libvips/organization/1/avatar.svg"></a>
+<a href="https://opencollective.com/libvips/organization/2/website"><img src="https://opencollective.com/libvips/organization/2/avatar.svg"></a>
+<a href="https://opencollective.com/libvips/organization/3/website"><img src="https://opencollective.com/libvips/organization/3/avatar.svg"></a>
+<a href="https://opencollective.com/libvips/organization/4/website"><img src="https://opencollective.com/libvips/organization/4/avatar.svg"></a>
+<a href="https://opencollective.com/libvips/organization/5/website"><img src="https://opencollective.com/libvips/organization/5/avatar.svg"></a>
+<a href="https://opencollective.com/libvips/organization/6/website"><img src="https://opencollective.com/libvips/organization/6/avatar.svg"></a>
+<a href="https://opencollective.com/libvips/organization/7/website"><img src="https://opencollective.com/libvips/organization/7/avatar.svg"></a>
+<a href="https://opencollective.com/libvips/organization/8/website"><img src="https://opencollective.com/libvips/organization/8/avatar.svg"></a>
+<a href="https://opencollective.com/libvips/organization/9/website"><img src="https://opencollective.com/libvips/organization/9/avatar.svg"></a>

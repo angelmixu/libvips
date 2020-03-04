@@ -11,7 +11,7 @@ from helpers import \
     JPEG_FILE, SRGB_FILE, MATLAB_FILE, PNG_FILE, TIF_FILE, OME_FILE, \
     ANALYZE_FILE, GIF_FILE, WEBP_FILE, EXR_FILE, FITS_FILE, OPENSLIDE_FILE, \
     PDF_FILE, SVG_FILE, SVGZ_FILE, SVG_GZ_FILE, GIF_ANIM_FILE, DICOM_FILE, \
-    BMP_FILE, NIFTI_FILE, ICO_FILE, HEIC_FILE, \
+    BMP_FILE, NIFTI_FILE, ICO_FILE, HEIC_FILE, TRUNCATED_FILE, \
     temp_filename, assert_almost_equal_objects, have, skip_if_no
 
 
@@ -23,10 +23,10 @@ class TestForeign:
         cls.tempdir = tempfile.mkdtemp()
 
         cls.colour = pyvips.Image.jpegload(JPEG_FILE)
-        cls.mono = cls.colour.extract_band(1)
+        cls.mono = cls.colour.extract_band(1).copy()
         # we remove the ICC profile: the RGB one will no longer be appropriate
         cls.mono.remove("icc-profile-data")
-        cls.rad = cls.colour.float2rad()
+        cls.rad = cls.colour.float2rad().copy()
         cls.rad.remove("icc-profile-data")
         cls.cmyk = cls.colour.bandjoin(cls.mono)
         cls.cmyk = cls.cmyk.copy(interpretation=pyvips.Interpretation.CMYK)
@@ -38,6 +38,11 @@ class TestForeign:
     @classmethod
     def teardown_class(cls):
         shutil.rmtree(cls.tempdir, ignore_errors=True)
+        cls.colour = None
+        cls.mono = None
+        cls.rad = None
+        cls.cmyk = None
+        cls.onebit = None
 
     # we have test files for formats which have a clear standard
     def file_loader(self, loader, test_file, validate):
@@ -124,11 +129,11 @@ class TestForeign:
     def test_jpeg(self):
         def jpeg_valid(im):
             a = im(10, 10)
-            assert_almost_equal_objects(a, [6, 5, 3])
+            assert_almost_equal_objects(a, [141, 127, 90])
             profile = im.get("icc-profile-data")
-            assert len(profile) == 1352
-            assert im.width == 1024
-            assert im.height == 768
+            assert len(profile) == 564
+            assert im.width == 290
+            assert im.height == 442
             assert im.bands == 3
 
         self.file_loader("jpegload", JPEG_FILE, jpeg_valid)
@@ -160,6 +165,7 @@ class TestForeign:
 
             # can remove orientation, save, load again, orientation
             # has reset
+            x = x.copy()
             x.remove("orientation")
 
             filename = temp_filename(self.tempdir, '.jpg')
@@ -182,6 +188,18 @@ class TestForeign:
             x2 = pyvips.Image.new_from_file(filename, autorotate=True)
             assert x1.width == x2.height
             assert x1.height == x2.width
+
+            # sets incorrect orientation, save, load again, orientation
+            # has reset to 1
+            x = x.copy()
+            x.set("orientation", 256)
+
+            filename = temp_filename(self.tempdir, '.jpg')
+            x.write_to_file(filename)
+
+            x = pyvips.Image.new_from_file(filename)
+            y = x.get("orientation")
+            assert y == 1
 
             # can set, save and reload ASCII string fields
             x = pyvips.Image.new_from_file(JPEG_FILE)
@@ -232,6 +250,19 @@ class TestForeign:
             # can't use == since the string will have an extra " (xx, yy, zz)" 
             # format area at the end
             assert y.startswith("hello world")
+
+    @skip_if_no("jpegload")
+    def test_truncated(self):
+        # This should open (there's enough there for the header)
+        im = pyvips.Image.new_from_file(TRUNCATED_FILE)
+        # but this should fail with a warning, and knock TRUNCATED_FILE out of
+        # the cache
+        x = im.avg()
+
+        # now we should open again, but it won't come from cache, it'll reload
+        im = pyvips.Image.new_from_file(TRUNCATED_FILE)
+        # and this should fail with a warning once more
+        x = im.avg()
 
     @skip_if_no("pngload")
     def test_png(self):
@@ -303,6 +334,7 @@ class TestForeign:
         x = pyvips.Image.new_from_file(filename)
         y = x.get("orientation")
         assert y == 2
+        x = x.copy()
         x.remove("orientation")
 
         filename = temp_filename(self.tempdir, '.tif')
@@ -542,6 +574,7 @@ class TestForeign:
         if have("gifload"):
             x1 = pyvips.Image.new_from_file(GIF_ANIM_FILE, n=-1)
             w1 = x1.webpsave_buffer(Q=10)
+
             x2 = pyvips.Image.new_from_buffer(w1, "", n=-1)
             assert x1.width == x2.width
             assert x1.height == x2.height
@@ -726,10 +759,10 @@ class TestForeign:
         self.colour.dzsave(filename, suffix=".png")
 
         # test horizontal overlap ... expect 256 step, overlap 1
-        x = pyvips.Image.new_from_file(filename + "_files/10/0_0.png")
+        x = pyvips.Image.new_from_file(filename + "_files/9/0_0.png")
         assert x.width == 255
-        y = pyvips.Image.new_from_file(filename + "_files/10/1_0.png")
-        assert y.width == 256
+        y = pyvips.Image.new_from_file(filename + "_files/9/1_0.png")
+        assert y.width == 37
 
         # the right two columns of x should equal the left two columns of y
         left = x.crop(x.width - 2, 0, 2, x.height)
@@ -738,8 +771,8 @@ class TestForeign:
 
         # test vertical overlap
         assert x.height == 255
-        y = pyvips.Image.new_from_file(filename + "_files/10/0_1.png")
-        assert y.height == 256
+        y = pyvips.Image.new_from_file(filename + "_files/9/0_1.png")
+        assert y.height == 189
 
         # the bottom two rows of x should equal the top two rows of y
         top = x.crop(0, x.height - 2, x.width, 2)
@@ -751,19 +784,19 @@ class TestForeign:
         assert x.width == 1
         assert x.height == 1
 
-        # 10 should be the final layer
-        assert not os.path.isdir(filename + "_files/11")
+        # 9 should be the final layer
+        assert not os.path.isdir(filename + "_files/10")
 
         # default google layout
         filename = temp_filename(self.tempdir, '')
         self.colour.dzsave(filename, layout="google")
 
         # test bottom-right tile ... default is 256x256 tiles, overlap 0
-        x = pyvips.Image.new_from_file(filename + "/2/2/3.jpg")
+        x = pyvips.Image.new_from_file(filename + "/1/1/1.jpg")
         assert x.width == 256
         assert x.height == 256
-        assert not os.path.exists(filename + "/2/2/4.jpg")
-        assert not os.path.exists(filename + "/3")
+        assert not os.path.exists(filename + "/1/1/2.jpg")
+        assert not os.path.exists(filename + "/2")
         x = pyvips.Image.new_from_file(filename + "/blank.png")
         assert x.width == 256
         assert x.height == 256
@@ -773,8 +806,10 @@ class TestForeign:
         # overlap 1, 510x510 pixels, 256 pixel tiles, should be exactly 2x2
         # tiles, though in fact the bottom and right edges will be white
         filename = temp_filename(self.tempdir, '')
-        self.colour.crop(0, 0, 510, 510).dzsave(filename, layout="google",
-                                                overlap=1, depth="one")
+        self.colour \
+            .replicate(2, 2) \
+            .crop(0, 0, 510, 510) \
+            .dzsave(filename, layout="google", overlap=1, depth="one")
 
         x = pyvips.Image.new_from_file(filename + "/0/1/1.jpg")
         assert x.width == 256
@@ -784,8 +819,10 @@ class TestForeign:
         # with 511x511, it'll fit exactly into 2x2 -- we we actually generate
         # 3x3, since we output the overlaps
         filename = temp_filename(self.tempdir, '')
-        self.colour.crop(0, 0, 511, 511).dzsave(filename, layout="google",
-                                                overlap=1, depth="one")
+        self.colour \
+            .replicate(2, 2) \
+            .crop(0, 0, 511, 511) \
+            .dzsave(filename, layout="google", overlap=1, depth="one")
 
         x = pyvips.Image.new_from_file(filename + "/0/2/2.jpg")
         assert x.width == 256
@@ -798,7 +835,7 @@ class TestForeign:
 
         # 256x256 tiles, no overlap
         assert os.path.exists(filename + "/ImageProperties.xml")
-        x = pyvips.Image.new_from_file(filename + "/TileGroup0/2-3-2.jpg")
+        x = pyvips.Image.new_from_file(filename + "/TileGroup0/1-0-0.jpg")
         assert x.width == 256
         assert x.height == 256
 
@@ -819,23 +856,23 @@ class TestForeign:
         filename = temp_filename(self.tempdir, '')
         self.colour.dzsave(filename, suffix=".png")
 
-        x = pyvips.Image.new_from_file(filename + "_files/10/0_0.png")
+        x = pyvips.Image.new_from_file(filename + "_files/9/0_0.png")
         assert x.width == 255
 
         # test overlap
         filename = temp_filename(self.tempdir, '')
         self.colour.dzsave(filename, overlap=200)
 
-        y = pyvips.Image.new_from_file(filename + "_files/10/1_1.jpeg")
-        assert y.width == 654
+        y = pyvips.Image.new_from_file(filename + "_files/9/1_1.jpeg")
+        assert y.width == 236
 
         # test tile-size
         filename = temp_filename(self.tempdir, '')
         self.colour.dzsave(filename, tile_size=512)
 
-        y = pyvips.Image.new_from_file(filename + "_files/10/0_0.jpeg")
-        assert y.width == 513
-        assert y.height == 513
+        y = pyvips.Image.new_from_file(filename + "_files/9/0_0.jpeg")
+        assert y.width == 290
+        assert y.height == 442
 
         # test save to memory buffer
         filename = temp_filename(self.tempdir, '.zip')

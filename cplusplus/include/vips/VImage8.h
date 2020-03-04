@@ -169,6 +169,8 @@ public:
 
 class VIPS_CPLUSPLUS_API VImage;
 class VIPS_CPLUSPLUS_API VInterpolate;
+class VIPS_CPLUSPLUS_API VSource;
+class VIPS_CPLUSPLUS_API VTarget;
 class VIPS_CPLUSPLUS_API VOption;
 
 class VOption
@@ -220,8 +222,10 @@ public:
 	VOption *set( const char *name, int value );
 	VOption *set( const char *name, double value );
 	VOption *set( const char *name, const char *value );
-	VOption *set( const char *name, VImage value );
-	VOption *set( const char *name, VInterpolate value ); 
+	VOption *set( const char *name, const VImage value );
+	VOption *set( const char *name, const VInterpolate value ); 
+	VOption *set( const char *name, const VSource value );
+	VOption *set( const char *name, const VTarget value );
 	VOption *set( const char *name, std::vector<VImage> value );
 	VOption *set( const char *name, std::vector<double> value );
 	VOption *set( const char *name, std::vector<int> value );
@@ -510,6 +514,9 @@ public:
 	static VImage new_from_buffer( const std::string &buf,
 		const char *option_string, VOption *options = 0 );
 
+	static VImage new_from_source( VSource source, 
+		const char *option_string, VOption *options = 0 );
+
 	static VImage new_matrix( int width, int height );
 
 	static VImage 
@@ -560,6 +567,9 @@ public:
 	void write_to_file( const char *name, VOption *options = 0 ) const;
 
 	void write_to_buffer( const char *suffix, void **buf, size_t *size, 
+		VOption *options = 0 ) const;
+
+	void write_to_target( const char *suffix, VTarget target, 
 		VOption *options = 0 ) const;
 
 	void *

@@ -36,6 +36,8 @@
  * 	- add vips_image_get_n_pages()
  * 20/6/19
  * 	- add vips_image_get/set_array_int()
+ * 31/1/19
+ * 	- lock for metadata changes
  */
 
 /*
@@ -129,6 +131,11 @@
  * reference-counted areas of memory. If you base your metadata on one of
  * these types, it can be copied between images efficiently.
  */
+
+/* Use in various small places where we need a mutex and it's not worth 
+ * making a private one.
+ */
+static GMutex *vips__meta_lock = NULL;
 
 /* We have to keep the gtype as a string, since we statically init this.
  */
@@ -443,12 +450,12 @@ vips_image_guess_format( const VipsImage *image )
 		break;
 
 	case VIPS_INTERPRETATION_sRGB: 
+	case VIPS_INTERPRETATION_RGB: 
 		format = VIPS_FORMAT_UCHAR;
 		break;
 
 	case VIPS_INTERPRETATION_XYZ: 
 	case VIPS_INTERPRETATION_LAB: 
-	case VIPS_INTERPRETATION_RGB: 
 	case VIPS_INTERPRETATION_CMC: 
 	case VIPS_INTERPRETATION_LCH: 
 	case VIPS_INTERPRETATION_HSV: 
@@ -519,8 +526,7 @@ vips_image_get_interpretation( const VipsImage *image )
 	return( image->Type );
 }
 
-/* Try to pick a sane value for interpretation, assuming Type has been set
- * incorrectly.
+/* Try to guess a sane value for interpretation.
  */
 static VipsInterpretation
 vips_image_default_interpretation( const VipsImage *image )
@@ -529,7 +535,7 @@ vips_image_default_interpretation( const VipsImage *image )
 	case VIPS_CODING_LABQ:
 		return( VIPS_INTERPRETATION_LABQ );
 	case VIPS_CODING_RAD:
-		return( VIPS_INTERPRETATION_RGB );
+		return( VIPS_INTERPRETATION_sRGB );
 	default:
 		break;
 	}
@@ -578,7 +584,7 @@ vips_image_guess_interpretation( const VipsImage *image )
 		break;
 
 	case VIPS_CODING_RAD:
-		if( image->Type != VIPS_INTERPRETATION_RGB )
+		if( image->Type != VIPS_INTERPRETATION_sRGB )
 			sane = FALSE;
 		break;
 
@@ -717,7 +723,8 @@ vips_image_get_yoffset( const VipsImage *image )
  * vips_image_get_filename: (method)
  * @image: image to get from
  *
- * Returns: the name of the file the image was loaded from. 
+ * Returns: the name of the file the image was loaded from, or NULL if there
+ * is no filename.
  */
 const char *
 vips_image_get_filename( const VipsImage *image )
@@ -930,8 +937,14 @@ meta_cp( VipsImage *dst, const VipsImage *src )
 		/* Loop, copying fields.
 		 */
 		meta_init( dst );
+
+		/* We lock with vips_image_set() to stop races in highly-
+		 * threaded applications.
+		 */
+		g_mutex_lock( vips__meta_lock );
 		vips_slist_map2( src->meta_traverse,
 			(VipsSListMap2Fn) meta_cp_field, dst, NULL );
+		g_mutex_unlock( vips__meta_lock );
 	}
 
 	return( 0 );
@@ -1020,7 +1033,17 @@ vips_image_set( VipsImage *image, const char *name, GValue *value )
 	g_assert( value );
 
 	meta_init( image );
+
+	/* We lock between modifying metadata and copying metadata between
+	 * images, see meta_cp().
+	 *
+	 * This prevents modification of metadata by one thread racing with
+	 * metadata copy on another -- this can lead to crashes in
+	 * highly-threaded applications.
+	 */
+	g_mutex_lock( vips__meta_lock );
 	(void) meta_new( image, name, value );
+	g_mutex_unlock( vips__meta_lock );
 
 	/* If we're setting an EXIF data block, we need to automatically expand 
 	 * out all the tags. This will set things like xres/yres too.
@@ -1035,6 +1058,7 @@ vips_image_set( VipsImage *image, const char *name, GValue *value )
 #ifdef DEBUG
 	meta_sanity( image );
 #endif /*DEBUG*/
+
 }
 
 /* Unforunately gvalue seems to have no way of doing this. Just handle the vips
@@ -1212,18 +1236,32 @@ vips_image_get_typeof( const VipsImage *image, const char *name )
 gboolean
 vips_image_remove( VipsImage *image, const char *name )
 {
-	if( image->meta && 
-		g_hash_table_remove( image->meta, name ) )
-		return( TRUE );
+	gboolean result;
 
-	return( FALSE );
+	result = FALSE;
+
+	if( image->meta ) {
+		/* We lock between modifying metadata and copying metadata 
+		 * between images, see meta_cp().
+		 *
+		 * This prevents modification of metadata by one thread 
+		 * racing with metadata copy on another -- this can lead to 
+		 * crashes in highly-threaded applications.
+		 */
+		g_mutex_lock( vips__meta_lock );
+		result = g_hash_table_remove( image->meta, name );
+		g_mutex_unlock( vips__meta_lock );
+	}
+
+	return( result );
 }
 
 /* Deprecated header fields we hide from _map.
  */
 static const char *vips_image_header_deprecated[] = {
 	"ipct-data",
-	"gif-delay"
+	"gif-delay",
+	"gif-loop"
 };
 
 static void *
@@ -1980,4 +2018,13 @@ vips_image_get_history( VipsImage *image )
 		image->Hist = vips__gslist_gvalue_get( image->history_list );
 
 	return( image->Hist ? image->Hist : "" );
+}
+
+/* Called during vips_init().
+ */
+void
+vips__meta_init( void )
+{
+	if( !vips__meta_lock ) 
+		vips__meta_lock = vips_g_mutex_new();
 }

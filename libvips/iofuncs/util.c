@@ -727,8 +727,11 @@ vips__file_read( FILE *fp, const char *filename, size_t *length_out )
 		do {
 			char *str2;
 
+			/* Again, a 1gb sanity limit.
+			 */
 			size += 1024;
-			if( !(str2 = realloc( str, size )) ) {
+			if( size > 1024 * 1024 * 1024 ||
+				!(str2 = realloc( str, size )) ) {
 				free( str ); 
 				vips_error( "vips__file_read", 
 					"%s", _( "out of memory" ) );
@@ -1025,31 +1028,34 @@ vips__gslist_gvalue_get( const GSList *list )
 	return( all );
 }
 
+gint64
+vips__seek_no_error( int fd, gint64 pos, int whence )
+{
+	gint64 new_pos;
+
+#ifdef OS_WIN32
+	new_pos = _lseeki64( fd, pos, whence );
+#else /*!OS_WIN32*/
+	new_pos = lseek( fd, pos, whence );
+#endif /*OS_WIN32*/
+
+	return( new_pos );
+}
+
 /* Need our own seek(), since lseek() on win32 can't do long files.
  */
-int
-vips__seek( int fd, gint64 pos )
+gint64
+vips__seek( int fd, gint64 pos, int whence )
 {
-#ifdef OS_WIN32
-{
-	HANDLE hFile = (HANDLE) _get_osfhandle( fd );
-	LARGE_INTEGER p;
+	gint64 new_pos;
 
-	p.QuadPart = pos;
-	if( !SetFilePointerEx( hFile, p, NULL, FILE_BEGIN ) ) {
-                vips_error_system( GetLastError(), "vips__seek", 
+	if( (new_pos = vips__seek_no_error( fd, pos, whence )) == -1 ) {
+		vips_error_system( errno, "vips__seek", 
 			"%s", _( "unable to seek" ) );
 		return( -1 );
 	}
-}
-#else /*!OS_WIN32*/
-	if( lseek( fd, pos, SEEK_SET ) == (off_t) -1 ) {
-		vips_error( "vips__seek", "%s", _( "unable to seek" ) );
-		return( -1 );
-	}
-#endif /*OS_WIN32*/
 
-	return( 0 );
+	return( new_pos );
 }
 
 /* Need our own ftruncate(), since ftruncate() on win32 can't do long files.
@@ -1065,10 +1071,8 @@ vips__ftruncate( int fd, gint64 pos )
 #ifdef OS_WIN32
 {
 	HANDLE hFile = (HANDLE) _get_osfhandle( fd );
-	LARGE_INTEGER p;
 
-	p.QuadPart = pos;
-	if( vips__seek( fd, pos ) )
+	if( vips__seek( fd, pos, SEEK_SET ) == -1 )
 		return( -1 );
 	if( !SetEndOfFile( hFile ) ) {
                 vips_error_system( GetLastError(), "vips__ftruncate", 
@@ -1873,25 +1877,10 @@ vips_realpath( const char *path )
 {
 	char *real;
 
-#ifdef HAVE_REALPATH
-{
-	char buf[PATH_MAX];
-
-	/* More modern realpath() allow NULL for the second param, but we want
-	 * to work with older libc as well.
+	/* It'd be nice to use realpath here, but sadly that won't work on
+	 * linux systems with grsec, since it works by opening /proc/self/fd.
 	 */
-	if( !(real = realpath( path, buf )) ) {
-		vips_error_system( errno, "vips_realpath",
-			"%s", _( "unable to form filename" ) ); 
-		return( NULL );
-	}
 
-	/* We must return a path that can be freed with g_free().
-	 */
-	real = g_strdup( real );
-}
-#else /*!HAVE_REALPATH*/
-{
 	if( !g_path_is_absolute( path ) ) {
 		char *cwd;
 
@@ -1901,8 +1890,6 @@ vips_realpath( const char *path )
 	}
 	else
 		real = g_strdup( path );
-}
-#endif
 
 	return( real );
 }
@@ -1999,4 +1986,29 @@ vips__windows_prefix( void )
 
 	return( (const char *) g_once( &once, 
 		(GThreadFunc) vips__windows_prefix_once, NULL ) );
+}
+
+char *
+vips__get_iso8601( void )
+{
+	char *date;
+
+#ifdef HAVE_DATE_TIME_FORMAT_ISO8601
+{
+	GDateTime *now;
+
+	now = g_date_time_new_now_local();
+	date = g_date_time_format_iso8601( now );
+	g_date_time_unref( now );
+}
+#else /*!HAVE_DATE_TIME_FORMAT_ISO8601*/
+{
+	GTimeVal now;
+
+	g_get_current_time( &now );
+	date = g_time_val_to_iso8601( &now ); 
+}
+#endif /*HAVE_DATE_TIME_FORMAT_ISO8601*/
+
+	return( date );
 }

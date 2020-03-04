@@ -330,6 +330,10 @@ vips_init( const char *argv0 )
 	extern GType write_thread_state_get_type( void );
 	extern GType sink_memory_thread_state_get_type( void ); 
 	extern GType render_thread_state_get_type( void ); 
+	extern GType vips_source_get_type( void ); 
+	extern GType vips_source_custom_get_type( void ); 
+	extern GType vips_target_get_type( void ); 
+	extern GType vips_target_custom_get_type( void ); 
 
 	static gboolean started = FALSE;
 	static gboolean done = FALSE;
@@ -378,6 +382,7 @@ vips_init( const char *argv0 )
 
 	vips__threadpool_init();
 	vips__buffer_init();
+	vips__meta_init();
 
 	/* This does an unsynchronised static hash table init on first call --
 	 * we have to make sure we do this single-threaded. See: 
@@ -444,6 +449,10 @@ vips_init( const char *argv0 )
 	(void) write_thread_state_get_type();
 	(void) sink_memory_thread_state_get_type(); 
 	(void) render_thread_state_get_type(); 
+	(void) vips_source_get_type(); 
+	(void) vips_source_custom_get_type(); 
+	(void) vips_target_get_type(); 
+	(void) vips_target_custom_get_type(); 
 	vips__meta_init_types();
 	vips__interpolate_init();
 	im__format_init();
@@ -871,7 +880,7 @@ extract_prefix( const char *dir, const char *name )
 	for( i = 0; i < (int) strlen( vname ); i++ ) 
 		if( vips_isprefix( G_DIR_SEPARATOR_S "." G_DIR_SEPARATOR_S, 
 			vname + i ) )
-			memcpy( vname + i, vname + i + 2, 
+			memmove( vname + i, vname + i + 2, 
 				strlen( vname + i + 2 ) + 1 );
 	if( vips_ispostfix( vname, G_DIR_SEPARATOR_S "." ) )
 		vname[strlen( vname ) - 2] = '\0';
@@ -998,7 +1007,8 @@ guess_prefix( const char *argv0, const char *name )
 
 	/* Try to guess from cwd. Only if this is a relative path, though. 
 	 */
-	if( !g_path_is_absolute( argv0 ) ) {
+	if( argv0 &&
+		!g_path_is_absolute( argv0 ) ) {
 		char *dir;
 		char full_path[VIPS_PATH_MAX];
 		char *resolved;

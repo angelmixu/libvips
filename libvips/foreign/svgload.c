@@ -64,10 +64,300 @@
 #include <ctype.h>
 
 #include <vips/vips.h>
-#include <vips/buf.h>
 #include <vips/internal.h>
+#include <vips/debug.h>
 
-#ifdef HAVE_RSVG
+/* We need GIO for GInputStream.
+ */
+
+#if defined(HAVE_RSVG) && defined(HAVE_GIO)
+
+#include <gio/gio.h>
+
+/* A GInputStream that's actually a VipsSource under the hood. This lets us
+ * hook librsvg up to libvips using the GInputStream interface.
+ */
+
+#define VIPS_TYPE_G_INPUT_STREAM (vips_g_input_stream_get_type())
+#define VIPS_G_INPUT_STREAM( obj ) \
+	(G_TYPE_CHECK_INSTANCE_CAST( (obj), \
+	VIPS_TYPE_G_INPUT_STREAM, VipsGInputStream ))
+#define VIPS_G_INPUT_STREAM_CLASS( klass ) \
+	(G_TYPE_CHECK_CLASS_CAST( (klass), \
+	VIPS_TYPE_G_INPUT_STREAM, VipsGInputStreamClass))
+#define VIPS_IS_G_INPUT_STREAM( obj ) \
+	(G_TYPE_CHECK_INSTANCE_TYPE( (obj), VIPS_TYPE_G_INPUT_STREAM ))
+#define VIPS_IS_G_INPUT_STREAM_CLASS( klass ) \
+	(G_TYPE_CHECK_CLASS_TYPE( (klass), VIPS_TYPE_G_INPUT_STREAM ))
+#define VIPS_G_INPUT_STREAM_GET_CLASS( obj ) \
+	(G_TYPE_INSTANCE_GET_CLASS( (obj), \
+	VIPS_TYPE_G_INPUT_STREAM, VipsGInputStreamClass ))
+
+/* GInputStream <--> VipsSource
+ */
+typedef struct _VipsGInputStream {
+	GInputStream parent_instance;
+
+	/*< private >*/
+
+	/* The VipsSource we wrap.
+	 */
+	VipsSource *source;
+
+} VipsGInputStream;
+
+typedef struct _VipsGInputStreamClass {
+	GInputStreamClass parent_class;
+
+} VipsGInputStreamClass;
+
+static void vips_g_input_stream_seekable_iface_init( GSeekableIface *iface );
+
+G_DEFINE_TYPE_WITH_CODE( VipsGInputStream, vips_g_input_stream, 
+	G_TYPE_INPUT_STREAM, G_IMPLEMENT_INTERFACE( G_TYPE_SEEKABLE,
+		vips_g_input_stream_seekable_iface_init ) )
+
+enum {
+	PROP_0,
+	PROP_STREAM
+};
+
+static void
+vips_g_input_stream_get_property( GObject *object, guint prop_id,
+	GValue *value, GParamSpec *pspec )
+{
+	VipsGInputStream *gstream = VIPS_G_INPUT_STREAM( object );
+
+	switch( prop_id ) {
+	case PROP_STREAM:
+		g_value_set_object( value, gstream->source );
+		break;
+
+	default:
+		G_OBJECT_WARN_INVALID_PROPERTY_ID( object, prop_id, pspec );
+	}
+}
+
+static void
+vips_g_input_stream_set_property( GObject *object, guint prop_id,
+	const GValue *value, GParamSpec *pspec )
+{
+	VipsGInputStream *gstream = VIPS_G_INPUT_STREAM( object );
+
+	switch( prop_id ) {
+	case PROP_STREAM:
+		gstream->source = g_value_dup_object( value );
+		break;
+
+	default:
+		G_OBJECT_WARN_INVALID_PROPERTY_ID( object, prop_id, pspec );
+	}
+}
+
+static void
+vips_g_input_stream_finalize( GObject *object )
+{
+	VipsGInputStream *gstream = VIPS_G_INPUT_STREAM( object );
+
+	VIPS_FREEF( g_object_unref, gstream->source );
+
+	G_OBJECT_CLASS( vips_g_input_stream_parent_class )->finalize( object );
+}
+
+static goffset
+vips_g_input_stream_tell( GSeekable *seekable )
+{
+	VipsSource *source = VIPS_G_INPUT_STREAM( seekable )->source;
+
+	goffset pos;
+
+	VIPS_DEBUG_MSG( "vips_g_input_stream_tell:\n" );
+
+	pos = vips_source_seek( source, 0, SEEK_CUR );
+	if( pos == -1 )
+		return( 0 );
+
+	return( pos );
+}
+
+static gboolean
+vips_g_input_stream_can_seek( GSeekable *seekable )
+{
+	VipsSource *source = VIPS_G_INPUT_STREAM( seekable )->source;
+
+	VIPS_DEBUG_MSG( "vips_g_input_stream_can_seek: %d\n", 
+		!source->is_pipe );
+
+	return( !source->is_pipe );
+}
+
+static int
+seek_type_to_lseek( GSeekType type )
+{
+	switch( type ) {
+	default:
+	case G_SEEK_CUR:
+		return( SEEK_CUR );
+	case G_SEEK_SET:
+		return( SEEK_SET );
+	case G_SEEK_END:
+		return( SEEK_END );
+	}
+}
+
+static gboolean
+vips_g_input_stream_seek( GSeekable *seekable, goffset offset,
+	GSeekType type, GCancellable *cancellable, GError **error )
+{
+	VipsSource *source = VIPS_G_INPUT_STREAM( seekable )->source;
+
+	VIPS_DEBUG_MSG( "vips_g_input_stream_seek: offset = %" G_GINT64_FORMAT
+		", type = %d\n", offset, type );
+
+	if( vips_source_seek( source, offset, 
+		seek_type_to_lseek( type ) ) == -1 ) {
+		g_set_error( error, G_IO_ERROR,
+			G_IO_ERROR_FAILED,
+			_( "Error while seeking: %s" ),
+			vips_error_buffer() );
+		return( FALSE );
+	}
+
+
+	return( TRUE );
+}
+
+static gboolean
+vips_g_input_stream_can_truncate( GSeekable *seekable )
+{
+	return( FALSE );
+}
+
+static gboolean
+vips_g_input_stream_truncate( GSeekable *seekable, goffset offset,
+	GCancellable *cancellable, GError **error )
+{
+	g_set_error_literal( error,
+		G_IO_ERROR,
+		G_IO_ERROR_NOT_SUPPORTED,
+		_( "Cannot truncate VipsGInputStream" ) );
+
+	return( FALSE );
+}
+
+static gssize
+vips_g_input_stream_read( GInputStream *stream, void *buffer, gsize count,
+	GCancellable *cancellable, GError **error )
+{
+	VipsSource *source;
+	gssize res;
+
+	source = VIPS_G_INPUT_STREAM( stream )->source;
+
+	VIPS_DEBUG_MSG( "vips_g_input_stream_read: count: %zd\n", count );
+
+	if( g_cancellable_set_error_if_cancelled( cancellable, error ) )
+		return( -1 );
+
+	if( (res = vips_source_read( source, buffer, count )) == -1 )
+		g_set_error( error, G_IO_ERROR,
+			G_IO_ERROR_FAILED,
+			_( "Error while reading: %s" ),
+			vips_error_buffer() );
+
+	return( res );
+}
+
+static gssize
+vips_g_input_stream_skip( GInputStream *stream, gsize count,
+	GCancellable *cancellable, GError **error )
+{
+	VipsSource *source;
+	gssize position;
+
+	source = VIPS_G_INPUT_STREAM( stream )->source;
+
+	VIPS_DEBUG_MSG( "vips_g_input_stream_skip: count: %zd\n", count );
+
+	if( g_cancellable_set_error_if_cancelled( cancellable, error ) )
+		return( -1 );
+
+	position = vips_source_seek( source, count, SEEK_CUR );
+	if( position == -1 ) {
+		g_set_error( error, G_IO_ERROR,
+			G_IO_ERROR_FAILED,
+			_( "Error while seeking: %s" ),
+			vips_error_buffer() );
+		return( -1 );
+	}
+
+	return( position );
+}
+
+static gboolean
+vips_g_input_stream_close( GInputStream *stream,
+	GCancellable *cancellable, GError **error )
+{
+	VipsGInputStream *gstream = VIPS_G_INPUT_STREAM( stream );
+
+	vips_source_minimise( gstream->source );
+
+	return( TRUE );
+}
+
+static void
+vips_g_input_stream_seekable_iface_init( GSeekableIface *iface )
+{
+	iface->tell = vips_g_input_stream_tell;
+	iface->can_seek = vips_g_input_stream_can_seek;
+	iface->seek = vips_g_input_stream_seek;
+	iface->can_truncate = vips_g_input_stream_can_truncate;
+	iface->truncate_fn = vips_g_input_stream_truncate;
+}
+
+static void
+vips_g_input_stream_class_init( VipsGInputStreamClass *class )
+{
+	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
+	GInputStreamClass *istream_class = G_INPUT_STREAM_CLASS( class );
+
+	gobject_class->finalize = vips_g_input_stream_finalize;
+	gobject_class->get_property = vips_g_input_stream_get_property;
+	gobject_class->set_property = vips_g_input_stream_set_property;
+
+	istream_class->read_fn = vips_g_input_stream_read;
+	istream_class->skip = vips_g_input_stream_skip;
+	istream_class->close_fn = vips_g_input_stream_close;
+
+	g_object_class_install_property( gobject_class, PROP_STREAM,
+		g_param_spec_object( "input",
+			_( "Input" ),
+			_( "Stream to wrap" ),
+			VIPS_TYPE_SOURCE, G_PARAM_CONSTRUCT_ONLY | 
+				G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS ) );
+
+}
+
+static void
+vips_g_input_stream_init( VipsGInputStream *gstream )
+{
+}
+
+/**
+ * g_input_stream_new_from_vips:
+ * @source: stream to wrap
+ *
+ * Create a new #GInputStream wrapping a #VipsSource.
+ *
+ * Returns: a new #GInputStream
+ */
+static GInputStream *
+g_input_stream_new_from_vips( VipsSource *source )
+{
+	return( g_object_new( VIPS_TYPE_G_INPUT_STREAM,
+		"input", source,
+		NULL ) );
+}
 
 #include <cairo.h>
 #include <librsvg/rsvg.h>
@@ -150,7 +440,7 @@ vips_foreign_load_svg_is_a( const void *buf, size_t len )
 	/* If the buffer looks like a zip, deflate to here and then search
 	 * that for <svg.
 	 */
-	char obuf[224];
+	char obuf[SVG_HEADER_SIZE];
 #endif /*HANDLE_SVGZ*/
 
 	int i;
@@ -186,8 +476,10 @@ vips_foreign_load_svg_is_a( const void *buf, size_t len )
 		do {
 			zs.avail_out = sizeof( obuf ) - opos;
 			zs.next_out = (unsigned char *) obuf + opos;
-			if( inflate( &zs, Z_NO_FLUSH ) < Z_OK ) 
+			if( inflate( &zs, Z_NO_FLUSH ) < Z_OK ) {
+				inflateEnd( &zs );
 				return( FALSE );
+			}
 			opos = sizeof( obuf ) - zs.avail_out;
 		} while( opos < sizeof( obuf ) && 
 			zs.avail_in > 0 );
@@ -282,9 +574,10 @@ vips_foreign_load_svg_parse( VipsForeignLoadSvg *svg, VipsImage *out )
 			 * cairo instead.
 			 */
 			svg->cairo_scale = scale;
-			width = width * scale;
-			height = height * scale;
-		} else {
+			width = VIPS_ROUND_UINT( width * scale );
+			height = VIPS_ROUND_UINT( height * scale );
+		} 
+		else {
 			/* SVG with width and height reports correctly scaled 
 			 * dimensions.
 			 */
@@ -422,6 +715,7 @@ vips_foreign_load_svg_class_init( VipsForeignLoadSvgClass *class )
 {
 	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
+	VipsForeignClass *foreign_class = (VipsForeignClass *) class;
 	VipsForeignLoadClass *load_class = (VipsForeignLoadClass *) class;
 
 	gobject_class->dispose = vips_foreign_load_svg_dispose;
@@ -430,6 +724,10 @@ vips_foreign_load_svg_class_init( VipsForeignLoadSvgClass *class )
 
 	object_class->nickname = "svgload";
 	object_class->description = _( "load SVG with rsvg" );
+
+	/* is_a() is not that quick ... lower the priority.
+	 */
+	foreign_class->priority = -5;
 
 	load_class->get_flags_filename = 
 		vips_foreign_load_svg_get_flags_filename;
@@ -465,6 +763,104 @@ vips_foreign_load_svg_init( VipsForeignLoadSvg *svg )
 	svg->dpi = 72.0;
 	svg->scale = 1.0;
 	svg->cairo_scale = 1.0;
+}
+
+typedef struct _VipsForeignLoadSvgSource {
+	VipsForeignLoadSvg parent_object;
+
+	/* Load from a source.
+	 */
+	VipsSource *source;
+
+} VipsForeignLoadSvgSource;
+
+typedef VipsForeignLoadClass VipsForeignLoadSvgSourceClass;
+
+G_DEFINE_TYPE( VipsForeignLoadSvgSource, vips_foreign_load_svg_source, 
+	vips_foreign_load_svg_get_type() );
+
+gboolean
+vips_foreign_load_svg_source_is_a_source( VipsSource *source )
+{
+	unsigned char *data;
+	size_t bytes_read;
+
+	if( (bytes_read = vips_source_sniff_at_most( source, 
+		&data, SVG_HEADER_SIZE )) <= 0 )
+		return( FALSE );
+
+	return( vips_foreign_load_svg_is_a( data, bytes_read ) );
+}
+
+static int
+vips_foreign_load_svg_source_header( VipsForeignLoad *load )
+{
+	VipsForeignLoadSvg *svg = (VipsForeignLoadSvg *) load;
+	VipsForeignLoadSvgSource *source = 
+		(VipsForeignLoadSvgSource *) load;
+	RsvgHandleFlags flags = svg->unlimited ? RSVG_HANDLE_FLAG_UNLIMITED : 0;
+
+	GError *error = NULL;
+
+	GInputStream *gstream;
+
+	if( vips_source_rewind( source->source ) )
+		return( -1 );
+
+	gstream = g_input_stream_new_from_vips( source->source );
+	if( !(svg->page = rsvg_handle_new_from_stream_sync( 
+		gstream, NULL, flags, NULL, &error )) ) {
+		g_object_unref( gstream );
+		vips_g_error( &error );
+		return( -1 ); 
+	}
+	g_object_unref( gstream );
+
+	return( vips_foreign_load_svg_header( load ) );
+}
+
+static int
+vips_foreign_load_svg_source_load( VipsForeignLoad *load )
+{
+	VipsForeignLoadSvgSource *source = (VipsForeignLoadSvgSource *) load;
+
+	if( vips_source_rewind( source->source ) ||
+		vips_foreign_load_svg_load( load ) ||
+		vips_source_decode( source->source ) )
+		return( -1 );
+
+	return( 0 );
+}
+
+static void
+vips_foreign_load_svg_source_class_init( VipsForeignLoadSvgSourceClass *class )
+{
+	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
+	VipsObjectClass *object_class = (VipsObjectClass *) class;
+	VipsForeignLoadClass *load_class = (VipsForeignLoadClass *) class;
+
+	gobject_class->set_property = vips_object_set_property;
+	gobject_class->get_property = vips_object_get_property;
+
+	object_class->nickname = "svgload_source";
+	object_class->description = _( "load svg from source" );
+
+	load_class->is_a_source = vips_foreign_load_svg_source_is_a_source;
+	load_class->header = vips_foreign_load_svg_source_header;
+	load_class->load = vips_foreign_load_svg_source_load;
+
+	VIPS_ARG_OBJECT( class, "source", 1,
+		_( "Source" ),
+		_( "Source to load from" ),
+		VIPS_ARGUMENT_REQUIRED_INPUT, 
+		G_STRUCT_OFFSET( VipsForeignLoadSvgSource, source ),
+		VIPS_TYPE_SOURCE );
+
+}
+
+static void
+vips_foreign_load_svg_source_init( VipsForeignLoadSvgSource *source )
+{
 }
 
 typedef struct _VipsForeignLoadSvgFile {
@@ -630,7 +1026,7 @@ vips_foreign_load_svg_buffer_init( VipsForeignLoadSvgBuffer *buffer )
 {
 }
 
-#endif /*HAVE_RSVG*/
+#endif /*HAVE_RSVG && HAVE_GIO*/
 
 /**
  * vips_svgload:
@@ -712,6 +1108,31 @@ vips_svgload_buffer( void *buf, size_t len, VipsImage **out, ... )
 	va_end( ap );
 
 	vips_area_unref( VIPS_AREA( blob ) );
+
+	return( result );
+}
+
+/**
+ * vips_svgload_source:
+ * @source: source to load from
+ * @out: (out): image to write
+ * @...: %NULL-terminated list of optional named arguments
+ *
+ * Exactly as vips_svgload(), but read from a source. 
+ *
+ * See also: vips_svgload().
+ *
+ * Returns: 0 on success, -1 on error.
+ */
+int
+vips_svgload_source( VipsSource *source, VipsImage **out, ... )
+{
+	va_list ap;
+	int result;
+
+	va_start( ap, out );
+	result = vips_call_split( "svgload_source", ap, source, out );
+	va_end( ap );
 
 	return( result );
 }

@@ -26,6 +26,8 @@
  *	- prevent over-pre-shrink in thumbnail
  * 30/9/19
  * 	- smarter heif thumbnail selection
+ * 12/10/19
+ * 	- add thumbnail_source
  */
 
 /*
@@ -518,13 +520,12 @@ static int
 vips_thumbnail_build( VipsObject *object )
 {
 	VipsThumbnail *thumbnail = VIPS_THUMBNAIL( object );
-	VipsImage **t = (VipsImage **) vips_object_local_array( object, 13 );
+	VipsImage **t = (VipsImage **) vips_object_local_array( object, 15 );
 	VipsInterpretation interpretation = thumbnail->linear ?
 		VIPS_INTERPRETATION_scRGB : VIPS_INTERPRETATION_sRGB; 
 
 	VipsImage *in;
 	int preshrunk_page_height;
-	int output_page_height;
 	double hshrink;
 	double vshrink;
 
@@ -671,9 +672,20 @@ vips_thumbnail_build( VipsObject *object )
 		return( -1 );
 	in = t[4];
 
-	output_page_height = VIPS_RINT( preshrunk_page_height / vshrink );
-	vips_image_set_int( in, 
-		VIPS_META_PAGE_HEIGHT, output_page_height );
+	/* Only set page-height if we have more than one page, or this could
+	 * accidentally turn into an animated image later.
+	 */
+	if( thumbnail->n_loaded_pages > 1 ) {
+		int output_page_height = 
+			VIPS_RINT( preshrunk_page_height / vshrink );
+
+		if( vips_copy( in, &t[13], NULL ) )
+			return( -1 );
+		in = t[13];
+
+		vips_image_set_int( in, 
+			VIPS_META_PAGE_HEIGHT, output_page_height );
+	}
 
 	if( have_premultiplied ) {
 		g_info( "unpremultiplying alpha" ); 
@@ -736,9 +748,10 @@ vips_thumbnail_build( VipsObject *object )
 		/* Need to copy to memory, we have to stay seq.
 		 */
 		if( !(t[9] = vips_image_copy_memory( in )) ||
-			vips_rot( t[9], &t[10], angle, NULL ) )
+			vips_rot( t[9], &t[10], angle, NULL ) ||
+			vips_copy( t[10], &t[14], NULL ) )
 			return( -1 ); 
-		in = t[10];
+		in = t[14];
 
 		vips_autorot_remove_angle( in );
 	}
@@ -1245,6 +1258,175 @@ vips_thumbnail_buffer( void *buf, size_t len, VipsImage **out, int width, ... )
 	va_end( ap );
 
 	vips_area_unref( VIPS_AREA( blob ) );
+
+	return( result );
+}
+
+typedef struct _VipsThumbnailSource {
+	VipsThumbnail parent_object;
+
+	VipsSource *source;
+	char *option_string;
+} VipsThumbnailSource;
+
+typedef VipsThumbnailClass VipsThumbnailSourceClass;
+
+G_DEFINE_TYPE( VipsThumbnailSource, vips_thumbnail_source, 
+	vips_thumbnail_get_type() );
+
+/* Get the info from a source.
+ */
+static int
+vips_thumbnail_source_get_info( VipsThumbnail *thumbnail )
+{
+	VipsThumbnailSource *source = (VipsThumbnailSource *) thumbnail;
+
+	VipsImage *image;
+
+	g_info( "thumbnailing source" ); 
+
+	if( !(thumbnail->loader = vips_foreign_find_load_source( 
+			source->source )) ||
+		!(image = vips_image_new_from_source( source->source, 
+			source->option_string, NULL )) )
+		return( -1 );
+
+	vips_thumbnail_read_header( thumbnail, image );
+
+	g_object_unref( image );
+
+	return( 0 );
+}
+
+/* Open an image, scaling as appropriate. 
+ */
+static VipsImage *
+vips_thumbnail_source_open( VipsThumbnail *thumbnail, double factor )
+{
+	VipsThumbnailSource *source = (VipsThumbnailSource *) thumbnail;
+
+	if( vips_isprefix( "VipsForeignLoadJpeg", thumbnail->loader ) ) {
+		return( vips_image_new_from_source( 
+			source->source, 
+			source->option_string,
+			"access", VIPS_ACCESS_SEQUENTIAL,
+			"shrink", (int) factor,
+			NULL ) );
+	}
+	else if( vips_isprefix( "VipsForeignLoadOpenslide", 
+		thumbnail->loader ) ) {
+		return( vips_image_new_from_source( 
+			source->source, 
+			source->option_string,
+			"access", VIPS_ACCESS_SEQUENTIAL,
+			"level", (int) factor,
+			NULL ) );
+	}
+	else if( vips_isprefix( "VipsForeignLoadPdf", thumbnail->loader ) ||
+		vips_isprefix( "VipsForeignLoadSvg", thumbnail->loader ) ||
+		vips_isprefix( "VipsForeignLoadWebp", thumbnail->loader ) ) {
+		return( vips_image_new_from_source( 
+			source->source, 
+			source->option_string,
+			"access", VIPS_ACCESS_SEQUENTIAL,
+			"scale", 1.0 / factor,
+			NULL ) );
+	}
+	else if( vips_isprefix( "VipsForeignLoadTiff", thumbnail->loader ) ) {
+		return( vips_image_new_from_source( 
+			source->source, 
+			source->option_string,
+			"access", VIPS_ACCESS_SEQUENTIAL,
+			"page", (int) factor,
+			NULL ) );
+	}
+	else if( vips_isprefix( "VipsForeignLoadHeif", thumbnail->loader ) ) {
+		return( vips_image_new_from_source( 
+			source->source, 
+			source->option_string,
+			"access", VIPS_ACCESS_SEQUENTIAL,
+			"thumbnail", (int) factor,
+			NULL ) );
+	}
+	else {
+		return( vips_image_new_from_source( 
+			source->source, 
+			source->option_string,
+			"access", VIPS_ACCESS_SEQUENTIAL,
+			NULL ) );
+	}
+}
+
+static void
+vips_thumbnail_source_class_init( VipsThumbnailClass *class )
+{
+	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
+	VipsObjectClass *vobject_class = VIPS_OBJECT_CLASS( class );
+	VipsThumbnailClass *thumbnail_class = VIPS_THUMBNAIL_CLASS( class );
+
+	gobject_class->set_property = vips_object_set_property;
+	gobject_class->get_property = vips_object_get_property;
+
+	vobject_class->nickname = "thumbnail_source";
+	vobject_class->description = _( "generate thumbnail from source" );
+
+	thumbnail_class->get_info = vips_thumbnail_source_get_info;
+	thumbnail_class->open = vips_thumbnail_source_open;
+
+	VIPS_ARG_OBJECT( class, "source", 1,
+		_( "Source" ),
+		_( "Source to load from" ),
+		VIPS_ARGUMENT_REQUIRED_INPUT, 
+		G_STRUCT_OFFSET( VipsThumbnailSource, source ),
+		VIPS_TYPE_SOURCE );
+
+	VIPS_ARG_STRING( class, "option_string", 20,
+		_( "Extra options" ),
+		_( "Options that are passed on to the underlying loader" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsThumbnailSource, option_string ),
+		"" );
+
+}
+
+static void
+vips_thumbnail_source_init( VipsThumbnailSource *source )
+{
+}
+
+/**
+ * vips_thumbnail_source:
+ * @source: source to thumbnail
+ * @out: (out): output image
+ * @width: target width in pixels
+ * @...: %NULL-terminated list of optional named arguments
+ *
+ * Optional arguments:
+ *
+ * * @height: %gint, target height in pixels
+ * * @size: #VipsSize, upsize, downsize, both or force
+ * * @no_rotate: %gboolean, don't rotate upright using orientation tag
+ * * @crop: #VipsInteresting, shrink and crop to fill target
+ * * @linear: %gboolean, perform shrink in linear light
+ * * @import_profile: %gchararray, fallback import ICC profile
+ * * @export_profile: %gchararray, export ICC profile
+ * * @intent: #VipsIntent, rendering intent
+ *
+ * Exactly as vips_thumbnail(), but read from a source. 
+ *
+ * See also: vips_thumbnail().
+ *
+ * Returns: 0 on success, -1 on error.
+ */
+int
+vips_thumbnail_source( VipsSource *source, VipsImage **out, int width, ... )
+{
+	va_list ap;
+	int result;
+
+	va_start( ap, width );
+	result = vips_call_split( "thumbnail_source", ap, source, out, width );
+	va_end( ap );
 
 	return( result );
 }
